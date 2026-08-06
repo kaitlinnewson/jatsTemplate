@@ -17,6 +17,7 @@ use DOMDocument;
 use DOMXPath;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PKP\facades\Locale;
+use PKP\submission\reviewAssignment\ReviewAssignment;
 use PKP\submission\reviewer\recommendation\enums\ReviewerRecommendationType;
 use PKP\tests\PKPTestCase;
 
@@ -47,6 +48,7 @@ class PeerReviewTest extends PKPTestCase
             'doiUrl' => null,
             'dateCompleted' => '2026-01-15 10:00:00',
             'isReviewOpen' => true,
+            'reviewMethod' => ReviewAssignment::SUBMISSION_REVIEW_METHOD_OPEN,
             'reviewerRecommendationDisplayText' => 'Accept Submission',
             'reviewerRecommendationId' => 1,
             'reviewerRecommendationTypeId' => ReviewerRecommendationType::APPROVED->value,
@@ -281,6 +283,7 @@ class PeerReviewTest extends PKPTestCase
 
         $pubDate = $this->query($doc, '//sub-article/front-stub/pub-date[@date-type="pub"]');
         self::assertCount(1, $pubDate);
+        self::assertEquals('2026-03-09', $pubDate->item(0)->getAttribute('iso-8601-date'));
         self::assertEquals('09', $this->query($doc, '//sub-article/front-stub/pub-date/day')->item(0)->textContent);
         self::assertEquals('03', $this->query($doc, '//sub-article/front-stub/pub-date/month')->item(0)->textContent);
         self::assertEquals('2026', $this->query($doc, '//sub-article/front-stub/pub-date/year')->item(0)->textContent);
@@ -665,6 +668,66 @@ class PeerReviewTest extends PKPTestCase
         self::assertCount(0, $this->query($doc, '//sub-article//script'));
     }
 
+    /**
+     * A soft line break survives as a JATS break, in whichever form the editor wrote it
+     */
+    public function testLineBreaksAreConvertedToJatsBreaks(): void
+    {
+        $doc = $this->buildDocument([
+            $this->createRound(
+                [$this->createReview(['reviewerComments' => ['First line.<br>Second line.<br />Third line.']])],
+                '1.0',
+                1,
+                $this->createAuthorResponse([
+                    'response' => ['en' => '<p>Our reply.<br/>On two lines.</p>'],
+                ])
+            ),
+        ]);
+
+        $reportParagraphs = $this->query($doc, '//sub-article[@article-type="reviewer-report"]/body/p');
+        self::assertCount(3, $reportParagraphs);
+        self::assertEquals('First line.', $reportParagraphs->item(0)->textContent);
+        self::assertEquals('Second line.', $reportParagraphs->item(1)->textContent);
+        self::assertEquals('Third line.', $reportParagraphs->item(2)->textContent);
+
+        $responseParagraphs = $this->query($doc, '//sub-article[@article-type="author-comment"]/body/p');
+        self::assertCount(2, $responseParagraphs);
+        self::assertEquals('Our reply.', $responseParagraphs->item(0)->textContent);
+        self::assertEquals('On two lines.', $responseParagraphs->item(1)->textContent);
+
+        $this->assertXmlValidatesAgainstJats12($doc);
+    }
+
+    /**
+     * A break against a paragraph edge would otherwise leave an empty paragraph behind
+     */
+    public function testLeadingAndTrailingLineBreaksLeaveNoEmptyParagraph(): void
+    {
+        $doc = $this->buildDocument([
+            $this->createRound([$this->createReview(['reviewerComments' => ['<br>Only line.<br>']])]),
+        ]);
+
+        $paragraphs = $this->query($doc, '//sub-article/body/p');
+        self::assertCount(1, $paragraphs);
+        self::assertEquals('Only line.', $paragraphs->item(0)->textContent);
+    }
+
+    /**
+     * A break already sitting on a paragraph boundary must not double up the tags, which
+     * would leave content malformed enough to fall back to flattened plain text
+     */
+    public function testLineBreakBetweenParagraphsIsAbsorbed(): void
+    {
+        $doc = $this->buildDocument([
+            $this->createRound([$this->createReview(['reviewerComments' => ['<p>First.</p><br><p>Second.</p>']])]),
+        ]);
+
+        $paragraphs = $this->query($doc, '//sub-article/body/p');
+        self::assertCount(2, $paragraphs);
+        self::assertEquals('First.', $paragraphs->item(0)->textContent);
+        self::assertEquals('Second.', $paragraphs->item(1)->textContent);
+    }
+
     public function testReviewWithoutContentOmitsBody(): void
     {
         $doc = $this->buildDocument([
@@ -708,6 +771,69 @@ class PeerReviewTest extends PKPTestCase
 
         self::assertCount(1, $metaValues);
         self::assertEquals($expected, $metaValues->item(0)->textContent);
+    }
+
+    public function testPeerReviewTypeIsMappedToJats4r(): void
+    {
+        $doc = $this->buildDocument([$this->createRound([$this->createReview()])]);
+
+        $metaValues = $this->query(
+            $doc,
+            '//sub-article/front-stub/custom-meta-group/custom-meta[meta-name="PeerReviewType"]/meta-value'
+        );
+
+        self::assertCount(1, $metaValues);
+        self::assertEquals('all-identities-visible', $metaValues->item(0)->textContent);
+    }
+
+    /**
+     * A review method with no JATS4R equivalent leaves out the type without affecting
+     * the rest of the custom metadata
+     */
+    public function testUnmappedReviewMethodOmitsPeerReviewType(): void
+    {
+        $doc = $this->buildDocument([$this->createRound([$this->createReview(['reviewMethod' => null])])]);
+
+        self::assertCount(0, $this->query($doc, '//custom-meta[meta-name="PeerReviewType"]'));
+        self::assertCount(1, $this->query($doc, '//custom-meta[meta-name="peer-review-recommendation"]'));
+    }
+
+    public function testRevisionRoundFollowsTheRoundNumber(): void
+    {
+        $doc = $this->buildDocument([
+            $this->createRound([$this->createReview(['id' => 1])], '1.0', 1),
+            $this->createRound([$this->createReview(['id' => 2])], '1.1', 2, $this->createAuthorResponse()),
+        ]);
+
+        $path = '/custom-meta-group/custom-meta[meta-name="peer-review-revision-round"]/meta-value';
+        $reports = $this->query($doc, '//sub-article[@article-type="reviewer-report"]/front-stub' . $path);
+
+        self::assertCount(2, $reports);
+        self::assertEquals('1', $reports->item(0)->textContent);
+        self::assertEquals('2', $reports->item(1)->textContent);
+
+        // The response is tagged with the round it replies to, not the first round
+        $responses = $this->query($doc, '//sub-article[@article-type="author-comment"]/front-stub' . $path);
+        self::assertCount(1, $responses);
+        self::assertEquals('2', $responses->item(0)->textContent);
+    }
+
+    /**
+     * The response describes neither the review type nor a recommendation
+     */
+    public function testAuthorResponseCarriesOnlyTheRevisionRound(): void
+    {
+        $doc = $this->buildDocument([
+            $this->createRound([$this->createReview()], '1.0', 1, $this->createAuthorResponse()),
+        ]);
+
+        $metaNames = $this->query($doc, '//sub-article[@article-type="author-comment"]/front-stub/custom-meta-group/custom-meta/meta-name');
+
+        $names = [];
+        foreach ($metaNames as $metaName) {
+            $names[] = $metaName->textContent;
+        }
+        self::assertEquals(['peer-review-revision-round'], $names);
     }
 
     public function testNoRoundsProduceNoSubArticles(): void

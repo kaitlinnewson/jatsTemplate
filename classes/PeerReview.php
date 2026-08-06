@@ -19,6 +19,7 @@ use DOMDocument;
 use DOMElement;
 use DOMNode;
 use PKP\API\v1\peerReviews\resources\SubmissionPeerReviewResource;
+use PKP\submission\reviewAssignment\ReviewAssignment;
 use PKP\submission\reviewer\recommendation\enums\ReviewerRecommendationType;
 
 class PeerReview extends DOMDocument
@@ -32,6 +33,18 @@ class PeerReview extends DOMDocument
         ReviewerRecommendationType::APPROVED->value => 'accept',
         ReviewerRecommendationType::NOT_APPROVED->value => 'reject',
         ReviewerRecommendationType::REVISIONS_REQUESTED->value => 'revision',
+    ];
+
+    /**
+     * Map OJS review methods to JATS4R PeerReviewType values, which follow STM's
+     * Standard Taxonomy for Peer Review. JATS4R's triple-anonymized has no OJS equivalent.
+     *
+     * @see https://jats4r.niso.org/peer-review-materials/
+     */
+    protected const PEER_REVIEW_TYPE_MAP = [
+        ReviewAssignment::SUBMISSION_REVIEW_METHOD_OPEN => 'all-identities-visible',
+        ReviewAssignment::SUBMISSION_REVIEW_METHOD_ANONYMOUS => 'single-anonymized',
+        ReviewAssignment::SUBMISSION_REVIEW_METHOD_DOUBLEANONYMOUS => 'double-anonymized',
     ];
 
     /**
@@ -157,13 +170,12 @@ class PeerReview extends DOMDocument
             $this->appendRelatedObject($frontStub, $reviewedDoi, 'peer-reviewed-article');
         }
 
-        // Reviewer recommendation
-        if ($recommendation = self::RECOMMENDATION_MAP[$review['reviewerRecommendationTypeId']] ?? null) {
-            $customMetaGroup = $frontStub->appendChild($this->createElement('custom-meta-group'));
-            $customMeta = $customMetaGroup->appendChild($this->createElement('custom-meta'));
-            $customMeta->appendChild($this->createElement('meta-name', 'peer-review-recommendation'));
-            $customMeta->appendChild($this->createElement('meta-value', $recommendation));
-        }
+        $reviewMethod = $review['reviewMethod'] ?? null;
+        $this->appendCustomMetaGroup($frontStub, [
+            'PeerReviewType' => $reviewMethod === null ? null : self::PEER_REVIEW_TYPE_MAP[$reviewMethod] ?? null,
+            'peer-review-revision-round' => $this->getRevisionRound($round),
+            'peer-review-recommendation' => self::RECOMMENDATION_MAP[$review['reviewerRecommendationTypeId']] ?? null,
+        ]);
 
         // Review content
         if ($body = $this->createBody($review)) {
@@ -250,10 +262,41 @@ class PeerReview extends DOMDocument
     }
 
     /**
+     * Append the JATS4R custom metadata describing a peer review material.
+     *
+     * @param array<string, ?string> $metas Meta names mapped to their values; a name with
+     *   no value is left out, and a group with no values at all is not created.
+     */
+    protected function appendCustomMetaGroup(DOMElement $frontStub, array $metas): void
+    {
+        $metas = array_filter($metas, fn (?string $value) => ($value ?? '') !== '');
+        if (!$metas) {
+            return;
+        }
+
+        $customMetaGroup = $frontStub->appendChild($this->createElement('custom-meta-group'));
+        foreach ($metas as $name => $value) {
+            $customMeta = $customMetaGroup->appendChild($this->createElement('custom-meta'));
+            $customMeta->appendChild($this->createElement('meta-name', $name));
+            $customMeta->appendChild($this->createElement('meta-value', $value));
+        }
+    }
+
+    /**
+     * Get a round's revision round number, counting the first round of public review as 1.
+     *
+     * JATS4R leaves it to the publisher whether the initial submission is round 0 or 1, so
+     * this follows the round numbering used in the sub-article titles.
+     */
+    protected function getRevisionRound(array $round): ?string
+    {
+        return isset($round['roundNumber']) ? (string) $round['roundNumber'] : null;
+    }
+
+    /**
      * Create a pub-date element for the date the review was completed.
      *
-     * Returns null when the date cannot be parsed, so an unparseable value is omitted
-     * rather than emitted as a 1970 epoch date.
+     * Returns null when the date cannot be parsed.
      */
     protected function createPubDate(string $date): ?DOMElement
     {
@@ -264,6 +307,7 @@ class PeerReview extends DOMDocument
         $pubDate = $this->createElement('pub-date');
         $pubDate->setAttribute('date-type', 'pub');
         $pubDate->setAttribute('publication-format', 'electronic');
+        $pubDate->setAttribute('iso-8601-date', date('Y-m-d', $timestamp));
         $pubDate->appendChild($this->createElement('day', date('d', $timestamp)));
         $pubDate->appendChild($this->createElement('month', date('m', $timestamp)));
         $pubDate->appendChild($this->createElement('year', date('Y', $timestamp)));
@@ -323,6 +367,12 @@ class PeerReview extends DOMDocument
                 $this->appendRelatedObject($frontStub, $doi, 'reviewer-report');
             }
         }
+
+        // The response belongs to the same round as the reports it addresses. It carries no
+        // PeerReviewType or recommendation: both describe the review, not the reply to it.
+        $this->appendCustomMetaGroup($frontStub, [
+            'peer-review-revision-round' => $this->getRevisionRound($round),
+        ]);
 
         $body = $subArticle->appendChild($this->createElement('body'));
         $this->appendSanitizedContent($body, $responseText);
@@ -428,15 +478,23 @@ class PeerReview extends DOMDocument
     protected function appendSanitizedContent(DOMElement $parent, string $html): void
     {
         // Keep only safe formatting tags supported by JATS
-        $allowedTags = '<i><em><b><strong><u><a><sup><sub><p>';
+        // <br> is included for later processing.
+        $allowedTags = '<i><em><b><strong><u><a><sup><sub><p><br>';
         $cleaned = strip_tags($html, $allowedTags);
         $escaped = htmlspecialchars($cleaned, ENT_COMPAT, 'UTF-8');
         $converted = JatsHelper::htmlToJats($escaped);
 
-        // Ensure the content is wrapped in at least one block-level paragraph
+        // Ensure the content is wrapped in at least one block-level paragraph. Line breaks are
+        // still escaped at this point, so they cannot be mistaken for an existing paragraph.
         if (!str_contains($converted, '<p>')) {
             $converted = "<p>{$converted}</p>";
         }
+
+        // JATS 1.2 has no in-paragraph line break, so a soft break ends the paragraph and
+        // starts the next one. A break that already sat on a paragraph boundary would double
+        // up the tags, and one against an edge would leave an empty paragraph.
+        $converted = preg_replace('/&lt;br\s*\/?&gt;/i', '</p><p>', $converted);
+        $converted = str_replace(['</p></p>', '<p><p>', '<p></p>'], ['</p>', '<p>', ''], $converted);
 
         $fragment = $this->createDocumentFragment();
         // Suppress warnings from malformed user-provided content
