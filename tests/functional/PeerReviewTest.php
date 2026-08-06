@@ -41,6 +41,8 @@ class PeerReviewTest extends PKPTestCase
             'id' => 1,
             'reviewerId' => 1,
             'reviewerFullName' => 'Reviewer Name',
+            'reviewerGivenName' => 'Reviewer',
+            'reviewerFamilyName' => 'Name',
             'reviewerAffiliation' => null,
             'reviewerOrcid' => null,
             'reviewerHasVerifiedOrcid' => false,
@@ -99,6 +101,8 @@ class PeerReviewTest extends PKPTestCase
                 [
                     'id' => 1,
                     'fullName' => 'Author One',
+                    'givenName' => 'Author',
+                    'familyName' => 'One',
                     'orcid' => 'https://orcid.org/0000-0002-1825-0097',
                     'hasVerifiedOrcid' => true
                 ],
@@ -217,9 +221,12 @@ class PeerReviewTest extends PKPTestCase
             ]),
         ]);
 
-        $stringName = $this->query($doc, '//sub-article/front-stub/contrib-group/contrib/string-name');
-        self::assertCount(1, $stringName);
-        self::assertEquals('Reviewer Name', $stringName->item(0)->textContent);
+        $name = $this->query($doc, '//sub-article/front-stub/contrib-group/contrib/name-alternatives/name');
+        self::assertCount(1, $name);
+        self::assertEquals('Name', $name->item(0)->getElementsByTagName('surname')->item(0)->textContent);
+        self::assertEquals('Reviewer', $name->item(0)->getElementsByTagName('given-names')->item(0)->textContent);
+        // No display name is recorded for a reviewer who has not chosen one
+        self::assertCount(0, $this->query($doc, '//sub-article//string-name'));
 
         $contribId = $this->query($doc, '//sub-article/front-stub/contrib-group/contrib/contrib-id[@contrib-id-type="orcid"]');
         self::assertCount(1, $contribId);
@@ -227,6 +234,90 @@ class PeerReviewTest extends PKPTestCase
         self::assertEquals('true', $contribId->item(0)->getAttribute('authenticated'));
 
         self::assertCount(0, $this->query($doc, '//sub-article//anonymous'));
+    }
+
+    /**
+     * With no name parts at all there is nothing to structure, so the full name stands alone
+     */
+    public function testContributorWithoutNamePartsKeepsStringName(): void
+    {
+        $doc = $this->buildDocument([
+            $this->createRound(
+                [$this->createReview(['reviewerFullName' => 'Unparsed Name', 'reviewerGivenName' => null, 'reviewerFamilyName' => null])],
+                '1.0',
+                1,
+                $this->createAuthorResponse([
+                    'associatedAuthors' => [['id' => 1, 'fullName' => 'Solo', 'givenName' => '', 'familyName' => '']],
+                ])
+            ),
+        ]);
+
+        $stringNames = $this->query($doc, '//sub-article//contrib/string-name');
+        self::assertCount(2, $stringNames);
+        self::assertEquals('Unparsed Name', $stringNames->item(0)->textContent);
+        self::assertEquals('Solo', $stringNames->item(1)->textContent);
+        self::assertCount(0, $this->query($doc, '//sub-article//name-alternatives'));
+
+        $this->assertXmlValidatesAgainstJats12($doc);
+    }
+
+    /**
+     * A chosen display name is kept alongside the structured name rather than replacing it,
+     * matching how ArticleFront records article contributors
+     */
+    public function testPreferredPublicNameIsKeptAlongsideTheStructuredName(): void
+    {
+        $doc = $this->buildDocument([
+            $this->createRound([$this->createReview(['reviewerPreferredPublicName' => 'R. N. Pseudonym'])]),
+        ]);
+
+        $alternatives = $this->query($doc, '//sub-article//contrib/name-alternatives');
+        self::assertCount(1, $alternatives);
+
+        $display = $this->query($doc, '//sub-article//name-alternatives/string-name[@specific-use="display"]');
+        self::assertCount(1, $display);
+        self::assertEquals('R. N. Pseudonym', $display->item(0)->textContent);
+
+        $name = $this->query($doc, '//sub-article//name-alternatives/name[@specific-use="primary"]');
+        self::assertCount(1, $name);
+        self::assertEquals('western', $name->item(0)->getAttribute('name-style'));
+        self::assertEquals('Name', $name->item(0)->getElementsByTagName('surname')->item(0)->textContent);
+
+        $this->assertXmlValidatesAgainstJats12($doc);
+    }
+
+    /**
+     * A contributor recorded under a single name is marked given-only rather than having
+     * that name treated as a surname
+     */
+    public function testContributorWithOnlyAGivenNameIsMarkedGivenOnly(): void
+    {
+        $doc = $this->buildDocument([
+            $this->createRound([$this->createReview(['reviewerGivenName' => 'Mononym', 'reviewerFamilyName' => null])]),
+        ]);
+
+        $name = $this->query($doc, '//sub-article//name-alternatives/name');
+        self::assertCount(1, $name);
+        self::assertEquals('given-only', $name->item(0)->getAttribute('name-style'));
+        self::assertCount(0, $this->query($doc, '//sub-article//name/surname'));
+        self::assertEquals('Mononym', $this->query($doc, '//sub-article//name/given-names')->item(0)->textContent);
+
+        $this->assertXmlValidatesAgainstJats12($doc);
+    }
+
+    /**
+     * The role names a part in the review process, so it stays fixed while the surrounding
+     * generated text follows the document language
+     */
+    public function testRoleLabelsAreNotLocalized(): void
+    {
+        $doc = $this->buildDocument(
+            [$this->createRound([$this->createReview()], '1.0', 1, $this->createAuthorResponse())],
+            'fr'
+        );
+
+        self::assertEquals('Reviewer', $this->query($doc, '//role[@specific-use="reviewer"]')->item(0)->textContent);
+        self::assertEquals('Author', $this->query($doc, '//role[@specific-use="author"]')->item(0)->textContent);
     }
 
     public function testUnverifiedOrcidIsNotAuthenticated(): void
@@ -376,10 +467,11 @@ class PeerReviewTest extends PKPTestCase
 
         $author = $this->query(
             $doc,
-            '//sub-article[@article-type="author-comment"]/front-stub/contrib-group/contrib/string-name'
+            '//sub-article[@article-type="author-comment"]/front-stub/contrib-group/contrib/name-alternatives/name'
         );
         self::assertCount(1, $author);
-        self::assertEquals('Author One', $author->item(0)->textContent);
+        self::assertEquals('One', $author->item(0)->getElementsByTagName('surname')->item(0)->textContent);
+        self::assertEquals('Author', $author->item(0)->getElementsByTagName('given-names')->item(0)->textContent);
 
         // Every contributor carries the JATS4R-required role
         self::assertCount(

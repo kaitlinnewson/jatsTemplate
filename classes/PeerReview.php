@@ -48,6 +48,13 @@ class PeerReview extends DOMDocument
     ];
 
     /**
+     * Contributor role labels. These name a part in the review process rather than describing
+     * the article, so they are fixed rather than following the document language.
+     */
+    protected const ROLE_REVIEWER = 'Reviewer';
+    protected const ROLE_AUTHOR = 'Author';
+
+    /**
      * Create a sub-article DOMNode for each publicly visible peer review of a submission.
      *
      * Reviews are gathered through the shared peer review resource, so only reviews that are
@@ -153,7 +160,7 @@ class PeerReview extends DOMDocument
             ->appendChild($this->createElement('article-title', htmlspecialchars($title)));
 
         // Reviewer contributor
-        $frontStub->appendChild($this->createContribGroup($review, $locale));
+        $frontStub->appendChild($this->createContribGroup($review));
 
         // Reviewer competing interests
         if ($authorNotes = $this->createAuthorNotes($review, $locale)) {
@@ -204,7 +211,7 @@ class PeerReview extends DOMDocument
      * Only open reviews reach this point, so the reviewer is normally named; the
      * <anonymous> fallback covers the edge case of an open review with no name.
      */
-    protected function createContribGroup(array $review, ?string $locale = null): DOMElement
+    protected function createContribGroup(array $review): DOMElement
     {
         $contribGroup = $this->createElement('contrib-group');
         $contrib = $contribGroup->appendChild($this->createElement('contrib'));
@@ -216,7 +223,13 @@ class PeerReview extends DOMDocument
                     ->setAttribute('contrib-id-type', 'orcid')->parentNode
                     ->setAttribute('authenticated', ($review['reviewerHasVerifiedOrcid'] ?? false) ? 'true' : 'false');
             }
-            $contrib->appendChild($this->createElement('string-name', htmlspecialchars($review['reviewerFullName'])));
+            $this->appendName(
+                $contrib,
+                $review['reviewerFullName'],
+                $review['reviewerPreferredPublicName'] ?? null,
+                $review['reviewerGivenName'] ?? null,
+                $review['reviewerFamilyName'] ?? null
+            );
 
             if (!empty($review['reviewerAffiliation'])) {
                 $contrib->appendChild($this->createElement('aff', htmlspecialchars($review['reviewerAffiliation'])));
@@ -225,24 +238,57 @@ class PeerReview extends DOMDocument
             $contrib->appendChild($this->createElement('anonymous'));
         }
 
-        $this->appendRole($contrib, 'plugins.generic.jatsTemplate.reviewerReport.role', 'reviewer', $locale);
+        $this->appendRole($contrib, self::ROLE_REVIEWER, 'reviewer');
 
         return $contribGroup;
     }
 
     /**
+     * Append a contributor's name, following the same structure ArticleFront uses for article
+     * contributors: a chosen display name is kept alongside the structured name, not instead
+     * of it, and a contributor recorded under a single name is marked given-only.
+     */
+    protected function appendName(
+        DOMElement $contrib,
+        string $fullName,
+        ?string $preferredPublicName,
+        ?string $givenName,
+        ?string $familyName
+    ): void {
+        // Without either part there is nothing to structure, so the full name stands alone
+        if (($givenName ?? '') === '' && ($familyName ?? '') === '') {
+            $contrib->appendChild($this->createElement('string-name', htmlspecialchars($fullName)));
+            return;
+        }
+
+        $nameAlternatives = $contrib->appendChild($this->createElement('name-alternatives'));
+
+        if (($preferredPublicName ?? '') !== '') {
+            $nameAlternatives->appendChild($this->createElement('string-name', htmlspecialchars($preferredPublicName)))
+                ->setAttribute('specific-use', 'display');
+        }
+
+        $name = $nameAlternatives->appendChild($this->createElement('name'));
+        $name->setAttribute('name-style', ($familyName ?? '') !== '' ? 'western' : 'given-only');
+        $name->setAttribute('specific-use', 'primary');
+
+        if (($familyName ?? '') !== '') {
+            $name->appendChild($this->createElement('surname', htmlspecialchars($familyName)));
+        }
+        if (($givenName ?? '') !== '') {
+            $name->appendChild($this->createElement('given-names', htmlspecialchars($givenName)));
+        }
+    }
+
+    /**
      * Append the JATS4R-required <role> element to a contributor.
      *
-     * The @specific-use value is a fixed JATS4R token, while the human-readable role label
-     * follows the document language.
+     * Both the @specific-use token and the label are fixed: the label names the contributor's
+     * part in the review process rather than describing the article, and receiving archives
+     * display it as-is, so it does not follow the document language.
      */
-    protected function appendRole(
-        DOMElement $contrib,
-        string $labelKey,
-        string $specificUse,
-        ?string $locale = null
-    ): void {
-        $label = htmlspecialchars(__($labelKey, [], $locale));
+    protected function appendRole(DOMElement $contrib, string $label, string $specificUse): void
+    {
         $contrib->appendChild($this->createElement('role', $label))
             ->setAttribute('specific-use', $specificUse);
     }
@@ -355,7 +401,7 @@ class PeerReview extends DOMDocument
         $frontStub->appendChild($this->createElement('title-group'))
             ->appendChild($this->createElement('article-title', htmlspecialchars($title)));
 
-        $frontStub->appendChild($this->createAuthorContribGroup($authorResponse['associatedAuthors'] ?? [], $locale));
+        $frontStub->appendChild($this->createAuthorContribGroup($authorResponse['associatedAuthors'] ?? []));
 
         if (($createdAt = $authorResponse['createdAt'] ?? null) && ($pubDate = $this->createPubDate($createdAt))) {
             $frontStub->appendChild($pubDate);
@@ -386,7 +432,7 @@ class PeerReview extends DOMDocument
      * Named authors are listed when available; a response with none still gets a single
      * anonymous author, so the JATS4R-required <contrib> and <role> are always present.
      */
-    protected function createAuthorContribGroup(array $authors, ?string $locale = null): DOMElement
+    protected function createAuthorContribGroup(array $authors): DOMElement
     {
         $contribGroup = $this->createElement('contrib-group');
 
@@ -403,15 +449,21 @@ class PeerReview extends DOMDocument
                     ->setAttribute('contrib-id-type', 'orcid')->parentNode
                     ->setAttribute('authenticated', ($author['hasVerifiedOrcid'] ?? false) ? 'true' : 'false');
             }
-            $contrib->appendChild($this->createElement('string-name', htmlspecialchars($author['fullName'])));
-            $this->appendRole($contrib, 'plugins.generic.jatsTemplate.authorResponse.role', 'author', $locale);
+            $this->appendName(
+                $contrib,
+                $author['fullName'],
+                $author['preferredPublicName'] ?? null,
+                $author['givenName'] ?? null,
+                $author['familyName'] ?? null
+            );
+            $this->appendRole($contrib, self::ROLE_AUTHOR, 'author');
         }
 
         if (!$contribGroup->hasChildNodes()) {
             $contrib = $contribGroup->appendChild($this->createElement('contrib'));
             $contrib->setAttribute('contrib-type', 'author');
             $contrib->appendChild($this->createElement('anonymous'));
-            $this->appendRole($contrib, 'plugins.generic.jatsTemplate.authorResponse.role', 'author', $locale);
+            $this->appendRole($contrib, self::ROLE_AUTHOR, 'author');
         }
 
         return $contribGroup;

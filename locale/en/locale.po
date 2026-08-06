@@ -23,8 +23,3 @@ msgstr "Peer Review #{$reviewNumber} of \"{$articleTitle}\" (Round {$roundNumber
 msgid "plugins.generic.jatsTemplate.authorResponse.title"
 msgstr "Author Response to Peer Review of \"{$articleTitle}\" (Round {$roundNumber}, {$versionString})"
 
-msgid "plugins.generic.jatsTemplate.reviewerReport.role"
-msgstr "Reviewer"
-
-msgid "plugins.generic.jatsTemplate.authorResponse.role"
-msgstr "Author"
