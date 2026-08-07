@@ -820,6 +820,84 @@ class PeerReviewTest extends PKPTestCase
         self::assertEquals('Second.', $paragraphs->item(1)->textContent);
     }
 
+    /**
+     * Reach the plain-text reduction create() applies to the stored HTML title
+     */
+    private static function reduceToPlainText(string $html): string
+    {
+        return (new class () extends PeerReview {
+            public static function reduce(string $html): string
+            {
+                return self::toPlainText($html);
+            }
+        })::reduce($html);
+    }
+
+    /**
+     * The title stored for a publication is HTML, so create() reduces it to the characters
+     * behind it before the sub-article titles are built from it
+     */
+    public function testStoredHtmlTitleIsReducedToItsCharacters(): void
+    {
+        self::assertEquals(
+            'Connectivity in the & Aquifer between Springs > < and Barton Springs',
+            self::reduceToPlainText('Connectivity in the &amp; Aquifer between Springs &gt; &lt; and Barton Springs')
+        );
+    }
+
+    /**
+     * Titles, questions and content are stored as HTML, so their special characters arrive
+     * already escaped and must not be escaped a second time on the way into the XML
+     */
+    public function testHtmlSourcedTextIsNotDoubleEscaped(): void
+    {
+        $peerReview = new PeerReview();
+        $subArticles = $peerReview->createSubArticles(
+            [
+                $this->createRound([
+                    $this->createReview([
+                        'reviewForm' => [
+                            'id' => 1,
+                            'title' => 'Review form',
+                            'description' => 'A review form',
+                            'questions' => [
+                                [
+                                    'question' => '<p>Are Smith &amp; Jones&#39; &lt;methods&gt; sound?</p>',
+                                    'responses' => ['<p>Yes, Smith &amp; Jones are &lt;rigorous&gt;.</p>'],
+                                ],
+                            ],
+                        ],
+                    ]),
+                ]),
+            ],
+            // create() reduces the stored HTML title to plain text before this point
+            self::reduceToPlainText('Connectivity in the &amp; Aquifer between Springs &gt; &lt; and Barton Springs')
+        );
+
+        $doc = new DOMDocument('1.0', 'UTF-8');
+        $article = $doc->appendChild($doc->createElement('article'));
+        foreach ($subArticles as $subArticle) {
+            $article->appendChild($doc->importNode($subArticle, true));
+        }
+
+        // The characters survive as themselves, escaped exactly once in the serialized XML
+        self::assertStringContainsString(
+            'Connectivity in the & Aquifer between Springs > < and Barton Springs',
+            $this->query($doc, '//sub-article/front-stub/title-group/article-title')->item(0)->textContent
+        );
+        self::assertStringNotContainsString('&amp;amp;', $doc->saveXML());
+        self::assertStringNotContainsString('&amp;lt;', $doc->saveXML());
+
+        self::assertEquals(
+            "Are Smith & Jones' <methods> sound?",
+            $this->query($doc, '//sub-article/body/sec/title')->item(0)->textContent
+        );
+        self::assertEquals(
+            'Yes, Smith & Jones are <rigorous>.',
+            $this->query($doc, '//sub-article/body/sec/p')->item(0)->textContent
+        );
+    }
+
     public function testReviewWithoutContentOmitsBody(): void
     {
         $doc = $this->buildDocument([
@@ -831,7 +909,7 @@ class PeerReviewTest extends PKPTestCase
     }
 
     /**
-     * @return array<string, array{int, ?string}>
+     * @return array<string, array{?int, ?string}>
      */
     public static function recommendationProvider(): array
     {
@@ -841,11 +919,13 @@ class PeerReviewTest extends PKPTestCase
             'revisions requested' => [ReviewerRecommendationType::REVISIONS_REQUESTED->value, 'revision'],
             // No JATS4R equivalent, so no recommendation is recorded
             'with comments' => [ReviewerRecommendationType::WITH_COMMENTS->value, null],
+            // A recommendation a journal defined itself may carry no machine-readable type
+            'no type' => [null, null],
         ];
     }
 
     #[\PHPUnit\Framework\Attributes\DataProvider('recommendationProvider')]
-    public function testRecommendationIsMappedToJats4r(int $typeId, ?string $expected): void
+    public function testRecommendationIsMappedToJats4r(?int $typeId, ?string $expected): void
     {
         $doc = $this->buildDocument([
             $this->createRound([$this->createReview(['reviewerRecommendationTypeId' => $typeId])]),

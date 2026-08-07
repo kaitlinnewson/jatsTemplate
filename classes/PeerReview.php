@@ -72,7 +72,7 @@ class PeerReview extends DOMDocument
         }
 
         $locale = $submission->getData('locale');
-        $articleTitle = trim(strip_tags($publication->getLocalizedTitle($locale, 'html')));
+        $articleTitle = self::toPlainText($publication->getLocalizedTitle($locale, 'html'));
 
         return $this->createSubArticles($reviewRounds, $articleTitle, $locale);
     }
@@ -177,11 +177,17 @@ class PeerReview extends DOMDocument
             $this->appendRelatedObject($frontStub, $reviewedDoi, 'peer-reviewed-article');
         }
 
+        // A review method or recommendation with no machine-readable type cannot be used as a map key
         $reviewMethod = $review['reviewMethod'] ?? null;
+        $recommendationType = $review['reviewerRecommendationTypeId'] ?? null;
         $this->appendCustomMetaGroup($frontStub, [
-            'PeerReviewType' => $reviewMethod === null ? null : self::PEER_REVIEW_TYPE_MAP[$reviewMethod] ?? null,
+            'PeerReviewType' => $reviewMethod === null
+                ? null
+                : (self::PEER_REVIEW_TYPE_MAP[$reviewMethod] ?? null),
             'peer-review-revision-round' => $this->getRevisionRound($round),
-            'peer-review-recommendation' => self::RECOMMENDATION_MAP[$review['reviewerRecommendationTypeId']] ?? null,
+            'peer-review-recommendation' => $recommendationType === null
+                ? null
+                : (self::RECOMMENDATION_MAP[$recommendationType] ?? null),
         ]);
 
         // Review content
@@ -508,7 +514,8 @@ class PeerReview extends DOMDocument
         if (!empty($questions)) {
             foreach ($questions as $question) {
                 $sec = $body->appendChild($this->createElement('sec'));
-                $sec->appendChild($this->createElement('title', htmlspecialchars($question['question'] ?? '')));
+                // The question is stored as rich text, so its markup is dropped for the title
+                $sec->appendChild($this->createElement('title', htmlspecialchars(self::toPlainText($question['question'] ?? ''))));
                 foreach ($question['responses'] ?? [] as $response) {
                     $this->appendSanitizedContent($sec, (string) $response);
                 }
@@ -525,6 +532,18 @@ class PeerReview extends DOMDocument
     }
 
     /**
+     * Reduce HTML-sourced text to the characters behind it.
+     *
+     * Titles, questions and review content are stored as HTML, so their special characters
+     * arrive already escaped. Decoding them here lets the caller escape exactly once when
+     * building the XML: escaping twice is what turns an "&" into "&amp;amp;" in the output.
+     */
+    protected static function toPlainText(?string $html): string
+    {
+        return trim(html_entity_decode(strip_tags((string) $html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
+    /**
      * Append user-provided HTML content to a parent element as JATS paragraph markup.
      */
     protected function appendSanitizedContent(DOMElement $parent, string $html): void
@@ -533,6 +552,10 @@ class PeerReview extends DOMDocument
         // <br> is included for later processing.
         $allowedTags = '<i><em><b><strong><u><a><sup><sub><p><br>';
         $cleaned = strip_tags($html, $allowedTags);
+        // Decode before re-escaping so an already-escaped character is not escaped twice.
+        // Anything decoding to markup other than the allowed tags stays escaped below, and so
+        // survives as the literal text the author wrote.
+        $cleaned = html_entity_decode($cleaned, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $escaped = htmlspecialchars($cleaned, ENT_COMPAT, 'UTF-8');
         $converted = JatsHelper::htmlToJats($escaped);
 
@@ -553,8 +576,8 @@ class PeerReview extends DOMDocument
         if (@$fragment->appendXML($converted)) {
             $parent->appendChild($fragment);
         } else {
-            // Fallback if XML parsing fails - createElement handles escaping automatically
-            $parent->appendChild($this->createElement('p', htmlspecialchars(strip_tags($html), ENT_COMPAT, 'UTF-8')));
+            // Fallback if XML parsing fails - the content is reduced to its plain text
+            $parent->appendChild($this->createElement('p', htmlspecialchars(self::toPlainText($html), ENT_COMPAT, 'UTF-8')));
         }
     }
 }
