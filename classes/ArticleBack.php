@@ -34,7 +34,7 @@ class ArticleBack extends DOMDocument
         $citations = $publication->getData('citations');
         $dataCitations = $publication->getData('dataCitations');
 
-        if (collect($citations)->isNotEmpty() || !empty($dataCitations)) {
+        if ($citations->isNotEmpty() || $dataCitations->isNotEmpty()) {
             // create element back
             $backElement = $this->appendChild($this->createElement('back'));
 
