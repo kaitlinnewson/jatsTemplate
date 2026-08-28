@@ -736,42 +736,40 @@ class ArticleFront extends DOMDocument
         }
 
         // Funding data
-        $funders = $submission->getData('funders')->toArray();
+        $funders = $submission->getData('funders');
         $fundingStatement = $publication->getData('fundingStatement');
-        if (!empty($funders) || !empty($fundingStatement)) {
+        if ($funders->isNotEmpty() || !empty($fundingStatement)) {
             $fundingGroupNode = $this->createElement('funding-group');
-            if (!empty($funders)) {
-                foreach ($funders as $i => $funder) {
-                    $awardGroupNode = $this->createElement('award-group');
-                    $awardGroupNode->setAttribute('id', 'ag' . $i);
+            foreach ($funders as $i => $funder) {
+                $awardGroupNode = $this->createElement('award-group');
+                $awardGroupNode->setAttribute('id', 'ag' . $i);
 
-                    $fundingSourceNode = $this->createElement('funding-source');
-                    $institutionWrapNode = $this->createElement('institution-wrap');
+                $fundingSourceNode = $this->createElement('funding-source');
+                $institutionWrapNode = $this->createElement('institution-wrap');
 
-                    if (!empty($funder->ror)) {
-                        $institutionIdNode = $this->createElement('institution-id', $funder->ror);
-                        $institutionIdNode->setAttribute('institution-id-type', 'ror');
-                        $institutionWrapNode->appendChild($institutionIdNode);
-                    }
+                if (!empty($funder->ror)) {
+                    $institutionIdNode = $this->createElement('institution-id', $funder->ror);
+                    $institutionIdNode->setAttribute('institution-id-type', 'ror');
+                    $institutionWrapNode->appendChild($institutionIdNode);
+                }
 
-                    $institutionWrapNode->appendChild($this->createElement('institution', $funder->getLocalizedData('name', $locale)));
-                    $fundingSourceNode->appendChild($institutionWrapNode);
-                    $awardGroupNode->appendChild($fundingSourceNode);
+                $institutionWrapNode->appendChild($this->createElement('institution', $funder->getLocalizedData('name', $locale)));
+                $fundingSourceNode->appendChild($institutionWrapNode);
+                $awardGroupNode->appendChild($fundingSourceNode);
 
-                    if (!empty($funder->grants)) {
-                        foreach ($funder->grants as $grant) {
-                            // Use grant DOI as award-id if available, otherwise fall back to grant number
-                            // In JATS 1.3 the @award-id-type attribute can specify the type of identifier (e.g. 'doi', 'grant_number', etc.).
-                            $awardId = $grant['grantDoi'] ?? $grant['grantNumber'] ?? null;
-                            if ($awardId) {
-                                $awardIdNode = $this->createElement('award-id', $awardId);
-                                $awardGroupNode->appendChild($awardIdNode);
-                            }
+                if (!empty($funder->grants)) {
+                    foreach ($funder->grants as $grant) {
+                        // Use grant DOI as award-id if available, otherwise fall back to grant number
+                        // In JATS 1.3 the @award-id-type attribute can specify the type of identifier (e.g. 'doi', 'grant_number', etc.).
+                        $awardId = $grant['grantDoi'] ?? $grant['grantNumber'] ?? null;
+                        if ($awardId) {
+                            $awardIdNode = $this->createElement('award-id', $awardId);
+                            $awardGroupNode->appendChild($awardIdNode);
                         }
                     }
-
-                    $fundingGroupNode->appendChild($awardGroupNode);
                 }
+
+                $fundingGroupNode->appendChild($awardGroupNode);
             }
             if (!empty($fundingStatement)) {
                 foreach ($fundingStatement as $locale => $statement) {
