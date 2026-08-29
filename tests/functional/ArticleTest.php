@@ -21,6 +21,7 @@ use APP\publication\Repository;
 use APP\section\Section;
 use APP\submission\Submission;
 use Mockery;
+use Illuminate\Support\Collection;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\MockObject\MockObject;
 use PKP\affiliation\Affiliation;
@@ -334,9 +335,9 @@ class ArticleTest extends PKPTestCase
     /**
      * Create mock Citation objects for testing
      * (citations do not exist)
-     * @return array<Citation>
+     * @return Collection
      */
-    private function createCitationMocks(): array
+    private function createCitationMocks(): Collection
     {
         $citations = [];
         // Structured citation 1: Journal article with DOI
@@ -440,7 +441,7 @@ class ArticleTest extends PKPTestCase
         $citation8->setRawCitation('Smith, J. & Jones, M. (2024). The <i>effects</i> of H<sub>2</sub>O on x<sup>2</sup>. <b>Nature</b>, 14(3). <a href="https://doi.org/10.1234/test">https://doi.org/10.1234/test</a>');
         $citations[] = $citation8;
 
-        return $citations;
+        return collect($citations);
     }
 
     public function testConvertToXml()

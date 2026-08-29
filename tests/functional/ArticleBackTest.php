@@ -112,6 +112,8 @@ class ArticleBackTest extends PKPTestCase
         $publication->setData('copyrightHolder', 'article-copyright');
         $publication->setData('copyrightYear', 'year');
         $publication->setData('authors', collect([$author]));
+        $publication->setData('dataCitations', collect());
+        $publication->setData('citations', collect());
 
         /** @var Doi|MockObject $galleyDoiObject */
         $galleyDoiObject = $this->getMockBuilder(Doi::class)
