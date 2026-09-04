@@ -26,7 +26,7 @@ class JatsHelper
      * @param array<string, string> $attributes Attributes to set on the created element
      * @param bool $allowParagraphs Preserve source <p> tags, for elements whose content model
      *             requires block-level content rather than direct inline text (e.g. <notes>, <bio>,
-     *             <fn>). Content with no source <p> tags is wrapped in one, since these elements'
+     *             <fn>). The content is normalized into <p> elements, since these elements'
      *             content models don't allow bare text either.
      */
     public static function htmlToJatsElement(
@@ -43,10 +43,7 @@ class JatsHelper
         $decoded = html_entity_decode($cleaned, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $escaped = htmlspecialchars($decoded, ENT_COMPAT, 'UTF-8');
         $jatsText = self::htmlToJats($escaped);
-        if ($allowParagraphs && $jatsText !== '' && !preg_match('/^<p[ >]/', $jatsText)) {
-            $jatsText = "<p>$jatsText</p>";
-        }
-        $innerXml = $jatsText;
+        $innerXml = $allowParagraphs ? self::normalizeParagraphs($jatsText) : $jatsText;
 
         $attributesXml = '';
         foreach ($attributes as $name => $value) {
@@ -76,6 +73,26 @@ class JatsHelper
     }
 
     /**
+     * Normalize converted content into the sequence of <p> elements required by an element whose
+     * content model is block-level. Content lying outside a source <p> - text preceding the first
+     * one, or between two of them - becomes a paragraph of its own rather than being swallowed
+     * into a wrapper around them, and a nested source <p> is flattened: JATS allows neither bare
+     * text nor a <p> inside a <p>.
+     */
+    public static function normalizeParagraphs(string $jatsText): string
+    {
+        $paragraphs = [];
+        // Only paragraph tags recognised by htmlToJats() are unescaped at this point, so splitting
+        // on them cannot break on a literal "<p>" the author wrote, which is still escaped.
+        foreach (preg_split('/<\/?p>/', $jatsText) as $fragment) {
+            if (trim($fragment) !== '') {
+                $paragraphs[] = '<p>' . trim($fragment) . '</p>';
+            }
+        }
+        return implode('', $paragraphs);
+    }
+
+    /**
      * Convert escaped HTML formatting tags to JATS equivalents
      */
     public static function htmlToJats(string $escapedText): string
@@ -95,12 +112,15 @@ class JatsHelper
             '&lt;/sup&gt;' => '</sup>',
             '&lt;sub&gt;' => '<sub>',
             '&lt;/sub&gt;' => '</sub>',
-            '&lt;p&gt;' => '<p>',
             '&lt;/p&gt;' => '</p>',
             '&lt;/a&gt;' => '</ext-link>',
         ];
 
         $jatsText = str_replace(array_keys($mapping), array_values($mapping), $escapedText);
+
+        // A rich-text editor may leave attributes on a paragraph (e.g. class, style); JATS <p>
+        // has no equivalent, so keep the element and drop them.
+        $jatsText = preg_replace('/&lt;p\b(?:(?!&gt;).)*&gt;/is', '<p>', $jatsText);
 
         // Convert links: &lt;a ... href=&quot;URL&quot; ...&gt; (any attribute order) → <ext-link>
         return preg_replace(

@@ -90,6 +90,53 @@ class JatsHelperTest extends PKPTestCase
     }
 
     /**
+     * Content preceding the first source <p> - a heading run, say - becomes a paragraph of its
+     * own. Wrapping the whole string instead would nest the source paragraphs inside it, which
+     * will fail DTD validation.
+     */
+    public function testWrapsContentPrecedingTheFirstParagraphSeparately()
+    {
+        self::assertSame(
+            '<root><notes notes-type="update-notice"><p><bold>Amendments from Version 1</bold></p><p>The manuscript was revised.</p></notes></root>',
+            $this->render('notes', "<b>Amendments from Version 1</b>\n<p>The manuscript was revised.</p>", ['notes-type' => 'update-notice'], allowParagraphs: true)
+        );
+    }
+
+    /**
+     * Whitespace around the source paragraphs is not included in content.
+     */
+    public function testIgnoresWhitespaceAroundParagraphs()
+    {
+        self::assertSame(
+            '<root><bio xml:lang="en"><p>First.</p><p>Second.</p></bio></root>',
+            $this->render('bio', "\n<p>First.</p>\n<p>Second.</p>\n", ['xml:lang' => 'en'], allowParagraphs: true)
+        );
+    }
+
+    /**
+     * A <p> nested in the source is flattened, since JATS does not allow one inside another.
+     */
+    public function testFlattensNestedSourceParagraphs()
+    {
+        self::assertSame(
+            '<root><bio xml:lang="en"><p>Outer.</p><p>Inner.</p></bio></root>',
+            $this->render('bio', '<p>Outer. <p>Inner.</p></p>', ['xml:lang' => 'en'], allowParagraphs: true)
+        );
+    }
+
+    /**
+     * A rich-text editor may leave attributes on a paragraph; the element is kept and they are
+     * dropped, rather than the whole tag surviving as literal text.
+     */
+    public function testConvertsParagraphsCarryingAttributes()
+    {
+        self::assertSame(
+            '<root><notes notes-type="update-notice"><p>First.</p><p>Second.</p></notes></root>',
+            $this->render('notes', '<p class="lead" dir="ltr">First.</p><p>Second.</p>', ['notes-type' => 'update-notice'], allowParagraphs: true)
+        );
+    }
+
+    /**
      * Elements whose content model disallows <p> (e.g. mixed-citation, funding-statement) must
      * have any source <p> tags stripped, not preserved or auto-wrapped.
      */
