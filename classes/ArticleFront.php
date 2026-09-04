@@ -544,9 +544,12 @@ class ArticleFront extends DOMDocument
                 $permissionsElement->appendChild($this->createElement('copyright-holder'))
                     ->appendChild($this->createTextNode($copyrightHolder));
             }
+            // NISO ALI free-to-read indicator (JATS4R permissions, PMC tagging guidelines)
+            if ($this->isFreeToRead($journal, $issue, $publication)) {
+                $permissionsElement->appendChild($this->createElement('ali:free_to_read'));
+            }
             if ($licenseUrl) {
-                $licenseElement = $permissionsElement->appendChild($this->createElement('license'))
-                    ->setAttribute('xlink:href', $licenseUrl)->parentNode;
+                $licenseElement = $permissionsElement->appendChild($this->createElement('license'));
                 if ($ccBadge) {
                     // The CC badge locale string is "<a...><img.../></a><p>prose sentence</p>";
                     // keep only the prose sentence - the image-badge anchor has no text content to preserve.
@@ -554,6 +557,20 @@ class ArticleFront extends DOMDocument
                     $contentType = str_contains($licenseUrl, '/by-nc') ? 'licensed non-commercial use' : 'open-access';
                     $licenseElement->appendChild(JatsHelper::htmlToJatsElement($this, 'license-p', $ccProse, ['content-type' => $contentType]));
                 }
+                // The machine-readable licence URL goes in ali:license_ref, and must match any
+                // licence link in license-p exactly. The badge prose links the canonical URL
+                // for the licence, so it is used wherever the URL appears.
+                $licenseRef = $licenseUrl;
+                foreach ($licenseElement->getElementsByTagName('ext-link') as $extLink) {
+                    if ($href = $extLink->getAttribute('xlink:href')) {
+                        $licenseRef = $href;
+                        break;
+                    }
+                }
+                $licenseElement->setAttribute('xlink:href', $licenseRef);
+                $licenseRefElement = $this->createElement('ali:license_ref');
+                $licenseRefElement->appendChild($this->createTextNode($licenseRef));
+                $licenseElement->insertBefore($licenseRefElement, $licenseElement->firstChild);
             }
         }
 
@@ -838,6 +855,19 @@ class ArticleFront extends DOMDocument
         }
 
         return $articleMetaElement;
+    }
+
+    /**
+     * Whether the article is available without access barriers: published in an open access
+     * journal, or as an open access issue or article in a subscription journal.
+     */
+    protected function isFreeToRead(Journal $journal, ?Issue $issue, Publication $publication): bool
+    {
+        $publishingMode = $journal->getData('publishingMode');
+
+        return ($publishingMode !== null && (int) $publishingMode === Journal::PUBLISHING_MODE_OPEN)
+            || (int) $issue?->getAccessStatus() === Issue::ISSUE_ACCESS_OPEN
+            || (int) $publication->getData('accessStatus') === Submission::ARTICLE_ACCESS_OPEN;
     }
 
     /**

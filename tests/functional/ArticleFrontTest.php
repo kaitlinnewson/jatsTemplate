@@ -286,6 +286,7 @@ class ArticleFrontTest extends \PKP\tests\PKPTestCase
         $journal->setData('publisherInstitution', 'journal-publisher');
         $journal->setData('onlineIssn', 'onlineIssn');
         $journal->setData('printIssn', 'printIssn');
+        $journal->setData('publishingMode', Journal::PUBLISHING_MODE_OPEN);
         $journal->setId($journalId);
 
         // Section
@@ -408,6 +409,72 @@ class ArticleFrontTest extends \PKP\tests\PKPTestCase
             trim(file_get_contents($this->xmlFilePath . 'articleMetaElement.xml')),
             trim($articleFrontElement->saveXML($xml))
         );
+    }
+
+    /**
+     * Build the article-meta for the mock record, after the caller has adjusted the
+     * mocks, and return its permissions element.
+     */
+    private function createPermissionsElement(OAIRecord $record): \DOMElement
+    {
+        $submission = $record->getData('article'); /** @var Submission $submission */
+        $journal = $record->getData('journal'); /** @var Journal $journal */
+        $section = $record->getData('section'); /** @var Section $section */
+        $issue = $record->getData('issue'); /** @var Issue $issue */
+
+        $this->stubPreviousVersionRelation();
+
+        $articleFrontElement = new ArticleFront();
+        $xml = $articleFrontElement->createArticleMeta(
+            $submission,
+            $journal,
+            $section,
+            $issue,
+            $this->createRequestMockInstance(),
+            $submission->getCurrentPublication()
+        );
+
+        return $xml->getElementsByTagName('permissions')->item(0);
+    }
+
+    /**
+     * A subscription journal's article is not free to read unless its issue or the
+     * article itself is open access, but its licence is still machine-readable.
+     */
+    public function testCreateArticleMetaOmitsFreeToReadForSubscriptionContent()
+    {
+        $record = $this->createOAIRecordMockObject();
+        $record->getData('journal')->setData('publishingMode', Journal::PUBLISHING_MODE_SUBSCRIPTION);
+
+        $permissions = $this->createPermissionsElement($record);
+
+        self::assertSame(0, $permissions->getElementsByTagName('ali:free_to_read')->length);
+        self::assertSame(
+            'https://creativecommons.org/licenses/by/4.0/',
+            $permissions->getElementsByTagName('ali:license_ref')->item(0)->textContent
+        );
+    }
+
+    public function testCreateArticleMetaMarksOpenAccessArticleInSubscriptionJournalFreeToRead()
+    {
+        $record = $this->createOAIRecordMockObject();
+        $record->getData('journal')->setData('publishingMode', Journal::PUBLISHING_MODE_SUBSCRIPTION);
+        $record->getData('article')->getCurrentPublication()->setData('accessStatus', Submission::ARTICLE_ACCESS_OPEN);
+
+        $permissions = $this->createPermissionsElement($record);
+
+        self::assertSame(1, $permissions->getElementsByTagName('ali:free_to_read')->length);
+    }
+
+    public function testCreateArticleMetaMarksOpenAccessIssueInSubscriptionJournalFreeToRead()
+    {
+        $record = $this->createOAIRecordMockObject();
+        $record->getData('journal')->setData('publishingMode', Journal::PUBLISHING_MODE_SUBSCRIPTION);
+        $record->getData('issue')->setData('accessStatus', Issue::ISSUE_ACCESS_OPEN);
+
+        $permissions = $this->createPermissionsElement($record);
+
+        self::assertSame(1, $permissions->getElementsByTagName('ali:free_to_read')->length);
     }
 
     /**
