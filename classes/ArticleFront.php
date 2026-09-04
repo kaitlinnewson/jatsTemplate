@@ -908,8 +908,11 @@ class ArticleFront extends DOMDocument
                     ->setAttribute('vocab', 'credit')->parentNode
                     ->setAttribute('vocab-identifier', 'https://credit.niso.org/')->parentNode
                     ->setAttribute('vocab-term', $roleTerm)->parentNode
-                    ->setAttribute('vocab-term-identifier', $role)->parentNode
-                    ->setAttribute('degree-contribution', $creditRoleTerms['degrees'][CreditRoleDegree::toLabel($degree)]);
+                    ->setAttribute('vocab-term-identifier', $role);
+                $degreeValue = CreditRoleDegree::toValue($degree);
+                if ($degreeValue && !empty($creditRoleTerms['degrees'][$degreeValue])) {
+                    $roleNode->setAttribute('degree-contribution', $creditRoleTerms['degrees'][$degreeValue]);
+                }
                 $roleNode->appendChild($this->createTextNode($roleTerm));
                 $roleNodes[] = $roleNode;
             }
