@@ -355,7 +355,7 @@ class ArticleFront extends DOMDocument
                     ->setAttribute('content-type', 'orgname');
                 $institutionWrapNode->appendChild($this->createElement('institution-id'))
                     ->appendChild($this->createTextNode($institution['id']))->parentNode
-                    ->setAttribute('institution-id-type', 'ROR');
+                    ->setAttribute('institution-id-type', 'ror');
             } else {
                 $affNode->appendChild($this->createElement('institution'))
                     ->appendChild($this->createTextNode($institution['name']))->parentNode

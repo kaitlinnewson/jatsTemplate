@@ -97,7 +97,7 @@
     <aff id="aff-1">
       <institution-wrap>
         <institution content-type="orgname">author-affiliation</institution>
-        <institution-id institution-id-type="ROR">https://ror.org/05ek4tb53</institution-id>
+        <institution-id institution-id-type="ror">https://ror.org/05ek4tb53</institution-id>
       </institution-wrap>
     </aff>
     <author-notes>
